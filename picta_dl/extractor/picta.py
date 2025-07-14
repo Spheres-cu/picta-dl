@@ -1,7 +1,10 @@
+import requests
+from typing import Optional, Dict, Any
+import time
+
 from base64 import b64encode
 import re
 import math
-
 from ..compat import compat_str, compat_HTTPError
 from ..utils import (
     float_or_none,
@@ -19,10 +22,82 @@ from .common import InfoExtractor
 
 ROOT_BASE_URL = "https://www.picta.cu/"
 API_BASE_URL = "https://api.picta.cu/v2/"
+API_CLIENT_ID = "ebkU3YeFu3So9hesQHrS8AZjEa4v7TiYbS5QZIgO"
 
+class PictaAPIClient:
+    def __init__(
+        self,
+        client_id: str = API_CLIENT_ID,
+        client_secret: str = "",
+        token_refresh_url: str = "https://api.picta.cu/o/token/",
+        base_url: str = API_BASE_URL,
+        timeout: int = 15
+    ):
+        """
+        PICTA API Client with automatic token refresh
+        
+        Args:
+            client_id: OAuth2 client ID
+            client_secret: OAuth2 client secret
+            token_refresh_url: URL for token refresh (default PICTA OAuth endpoint)
+            base_url: PICTA API base URL (default v2)
+            timeout: Request timeout in seconds
+        """
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.token_refresh_url = token_refresh_url
+        self.base_url = base_url.rstrip('/')
+        self.timeout = timeout
+        self.access_token:Optional[str] = None
+        self.refresh_token:Optional[str] = None
+        self.token_expires_at = 0
+        
+        # Initialize session
+        self.session = requests.Session()
+
+    def authenticate(self, username: str, password: str) -> bool:
+        """Initial authentication with username/password"""
+        data = {
+            "grant_type": "password",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "username": username,
+            "password": password
+        }
+        
+        response:Any = None
+        try:
+            response = requests.post(
+                self.token_refresh_url,
+                data=data,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            token_data = response.json()
+            
+            self.access_token = token_data["access_token"]
+            self.refresh_token = token_data["refresh_token"]
+            self.token_expires_at = time.time() + token_data["expires_in"] - 60  # 1 min buffer
+            self.session.headers["Authorization"] = f"Bearer {self.access_token}"
+            return True
+            
+        except Exception as e:
+            print(f"Authentication failed: {str(e)}")
+            return False
 
 # noinspection PyAbstractClass
 class PictaBaseIE(InfoExtractor):
+
+    def _set_auth_bearer(self):
+        client = PictaAPIClient()
+        username, password = self._get_login_info()
+        headers:Dict[str, Any] = {}
+
+        if client.authenticate(f'{username}', f'{password}'):
+            headers['Authorization'] = f'Bearer {client.access_token}'
+        
+        return headers
+    
     @staticmethod
     def _extract_video(video, video_id=None, require_title=True):
         if len(video["results"]) == 0:
@@ -70,7 +145,6 @@ class PictaBaseIE(InfoExtractor):
             "playlist_channel": playlist_channel,
             "subtitle_url": subtitle_url,
         }
-
 
 # noinspection PyAbstractClass
 class PictaIE(PictaBaseIE):
@@ -181,7 +255,7 @@ class PictaIE(PictaBaseIE):
                 )
             sub_lang_list[lang] = sub_formats
         if not sub_lang_list:
-            self._downloader.report_warning("video doesn't have subtitles")
+            self.report_warning("video doesn't have subtitles")
             return {}
         return sub_lang_list
 
@@ -375,7 +449,7 @@ class PictaIE(PictaBaseIE):
                             else None
                         )
                         bandwidth = int_or_none(representation_attrib.get("bandwidth"))
-                        f = {
+                        f:Dict[str, Any] = {
                             "format_id": "%s-%s" % (mpd_id, representation_id)
                             if mpd_id
                             else representation_id,
@@ -393,7 +467,7 @@ class PictaIE(PictaBaseIE):
                             else None,
                             "format_note": "DASH %s" % content_type,
                             "filesize": filesize,
-                            "container": mimetype2ext(mime_type) + "_dash",
+                            "container": f'{mimetype2ext(mime_type)}' + "_dash",
                         }
                         f.update(parse_codecs(representation_attrib.get("codecs")))
                         representation_ms_info = extract_multisegment_info(
@@ -621,12 +695,13 @@ class PictaIE(PictaBaseIE):
                             "Unknown MIME type %s in DASH manifest" % mime_type
                         )
         return formats
-
+    
     def _real_extract(self, url):
         playlist_id = None
         video_id = self._match_id(url)
         json_url = API_BASE_URL + "publicacion/?format=json&slug_url_raw=%s" % video_id
-        video = self._download_json(json_url, video_id, "Downloading video JSON")
+        video = self._download_json(json_url, video_id, "Downloading video JSON", headers=self._set_auth_bearer())
+
         info = self._extract_video(video, video_id)
         if (
             info["playlist_channel"]
@@ -759,7 +834,7 @@ class PictaEmbedIE(InfoExtractor):
 
 
 # noinspection PyAbstractClass
-class PictaPlaylistIE(InfoExtractor):
+class PictaPlaylistIE(PictaBaseIE):
     API_PLAYLIST_ENDPOINT = API_BASE_URL + "lista_reproduccion_canal/"
     IE_NAME = "picta:playlist"
     IE_DESC = "Picta playlist"
@@ -777,26 +852,7 @@ class PictaPlaylistIE(InfoExtractor):
         m = cls._VALID_URL_RE.match(url)
         assert m
         return m.group("playlist_id")
-
-    def _set_auth_basic(self):
-        header = {}
-        username, password = self._get_login_info()
-        if username is None:
-            return header
-
-        if isinstance(username, str):
-            username = username.encode("latin1")
-
-        if isinstance(password, str):
-            password = password.encode("latin1")
-
-        authstr = "Basic " + compat_str(
-            b64encode(b":".join((username, password))).decode("utf-8")
-        )
-
-        header["Authorization"] = authstr
-        return header
-
+    
     def _extract_playlist(self, playlist, playlist_id=None, require_title=True):
         if len(playlist.get("results", [])) == 0:
             raise ExtractorError("Cannot find playlist!")
@@ -819,11 +875,10 @@ class PictaPlaylistIE(InfoExtractor):
 
     def _entries(self, playlist_id):
         json_url = self.API_PLAYLIST_ENDPOINT + "?format=json&id=%s" % playlist_id
-        headers = self._set_auth_basic()
         playlist = {}
         try:
             playlist = self._download_json(
-                json_url, playlist_id, "Downloading playlist JSON", headers=headers
+                json_url, playlist_id, "Downloading playlist JSON", headers=self._set_auth_bearer()
             )
             assert playlist.get("count", 0) >= 1
         except ExtractorError as e:
@@ -872,9 +927,8 @@ class PictaChannelPlaylistIE(PictaPlaylistIE):
         },
     }
 
-
 # noinspection PyAbstractClass
-class PictaUserPlaylistIE(PictaPlaylistIE, PictaBaseIE):
+class PictaUserPlaylistIE(PictaPlaylistIE):
     API_PLAYLIST_ENDPOINT = API_BASE_URL + "lista_reproduccion/"
     IE_NAME = "picta:user:playlist"
     IE_DESC = "Picta user playlist"
@@ -899,12 +953,11 @@ class PictaUserPlaylistIE(PictaPlaylistIE, PictaBaseIE):
         )
         thumbnail = None
         entries = try_get(playlist, lambda x: x["results"][0]["publicacion"])
-
         # Playlist User need update slug_url video
         for entry in entries:
             video_id = entry.get("id")
             json_url = API_BASE_URL + "publicacion/?format=json&id=%s" % video_id
-            video = self._download_json(json_url, video_id, "Downloading video JSON")
+            video = self._download_json(json_url, video_id, "Downloading video JSON", headers=self._set_auth_bearer())
             info = self._extract_video(video, video_id)
             entry["slug_url"] = info.get("slug_url")
 
