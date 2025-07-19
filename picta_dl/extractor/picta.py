@@ -1,6 +1,4 @@
-import requests
-from typing import Optional, Dict, Any
-import time
+from typing import Dict, Any
 
 from base64 import b64encode
 import re
@@ -17,87 +15,18 @@ from ..utils import (
     ExtractorError,
     base_url,
     determine_ext,
+    urlencode_postdata,
 )
 from .common import InfoExtractor
 
 ROOT_BASE_URL = "https://www.picta.cu/"
 API_BASE_URL = "https://api.picta.cu/v2/"
 API_CLIENT_ID = "ebkU3YeFu3So9hesQHrS8AZjEa4v7TiYbS5QZIgO"
-
-class PictaAPIClient:
-    def __init__(
-        self,
-        client_id: str = API_CLIENT_ID,
-        client_secret: str = "",
-        token_refresh_url: str = "https://api.picta.cu/o/token/",
-        base_url: str = API_BASE_URL,
-        timeout: int = 15
-    ):
-        """
-        PICTA API Client with automatic token refresh
-        
-        Args:
-            client_id: OAuth2 client ID
-            client_secret: OAuth2 client secret
-            token_refresh_url: URL for token refresh (default PICTA OAuth endpoint)
-            base_url: PICTA API base URL (default v2)
-            timeout: Request timeout in seconds
-        """
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.token_refresh_url = token_refresh_url
-        self.base_url = base_url.rstrip('/')
-        self.timeout = timeout
-        self.access_token:Optional[str] = None
-        self.refresh_token:Optional[str] = None
-        self.token_expires_at = 0
-        
-        # Initialize session
-        self.session = requests.Session()
-
-    def authenticate(self, username: str, password: str) -> bool:
-        """Initial authentication with username/password"""
-        data = {
-            "grant_type": "password",
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "username": username,
-            "password": password
-        }
-        
-        response:Any = None
-        try:
-            response = requests.post(
-                self.token_refresh_url,
-                data=data,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            token_data = response.json()
-            
-            self.access_token = token_data["access_token"]
-            self.refresh_token = token_data["refresh_token"]
-            self.token_expires_at = time.time() + token_data["expires_in"] - 60  # 1 min buffer
-            self.session.headers["Authorization"] = f"Bearer {self.access_token}"
-            return True
-            
-        except Exception as e:
-            print(f"Authentication failed: {str(e)}")
-            return False
+API_TOKEN_URL = "https://api.picta.cu/o/token/"
 
 # noinspection PyAbstractClass
 class PictaBaseIE(InfoExtractor):
-
-    def _set_auth_bearer(self):
-        client = PictaAPIClient()
-        username, password = self._get_login_info()
-        headers:Dict[str, Any] = {}
-
-        if client.authenticate(f'{username}', f'{password}'):
-            headers['Authorization'] = f'Bearer {client.access_token}'
-        
-        return headers
-    
+   
     @staticmethod
     def _extract_video(video, video_id=None, require_title=True):
         if len(video["results"]) == 0:
@@ -229,7 +158,36 @@ class PictaIE(PictaBaseIE):
 
     def _real_initialize(self):
         self.playlist_id = None
+        # Fetch credentials (e.g., from netrc or user input)
+        username, password = self._get_login_info()
+        if not username or not password:
+            raise self.raise_login_required(msg="Login credentials needed")
+        
+        self._access_token = self._get_access_token(username, password)
+        self._HEADERS = {"Authorization": f"Bearer {self._access_token}"}
 
+    def _get_access_token(self, username, password):
+        data =urlencode_postdata( {
+            "grant_type": "password",
+            "client_id": API_CLIENT_ID,
+            "client_secret": "",
+            "username": username,
+            "password": password,
+        })
+
+        token_response = self._download_json(
+            API_TOKEN_URL, None,
+            data=data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            fatal=True,  # Crash if token fetch fails
+        )
+
+        if not token_response or 'access_token' not in token_response:
+            self._downloader.report_error("Failed to fetch access token")
+            return None
+        
+        return token_response['access_token']
+    
     @classmethod
     def _match_playlist_id(cls, url):
         if "_VALID_URL_RE" not in cls.__dict__:
@@ -700,7 +658,7 @@ class PictaIE(PictaBaseIE):
         playlist_id = None
         video_id = self._match_id(url)
         json_url = API_BASE_URL + "publicacion/?format=json&slug_url_raw=%s" % video_id
-        video = self._download_json(json_url, video_id, "Downloading video JSON", headers=self._set_auth_bearer())
+        video = self._download_json(json_url, video_id, "Downloading video JSON", headers=self._HEADERS)
 
         info = self._extract_video(video, video_id)
         if (
@@ -834,7 +792,7 @@ class PictaEmbedIE(InfoExtractor):
 
 
 # noinspection PyAbstractClass
-class PictaPlaylistIE(PictaBaseIE):
+class PictaPlaylistIE(PictaIE):
     API_PLAYLIST_ENDPOINT = API_BASE_URL + "lista_reproduccion_canal/"
     IE_NAME = "picta:playlist"
     IE_DESC = "Picta playlist"
@@ -878,7 +836,7 @@ class PictaPlaylistIE(PictaBaseIE):
         playlist = {}
         try:
             playlist = self._download_json(
-                json_url, playlist_id, "Downloading playlist JSON", headers=self._set_auth_bearer()
+                json_url, playlist_id, "Downloading playlist JSON", headers=self._HEADERS
             )
             assert playlist.get("count", 0) >= 1
         except ExtractorError as e:
@@ -957,7 +915,7 @@ class PictaUserPlaylistIE(PictaPlaylistIE):
         for entry in entries:
             video_id = entry.get("id")
             json_url = API_BASE_URL + "publicacion/?format=json&id=%s" % video_id
-            video = self._download_json(json_url, video_id, "Downloading video JSON", headers=self._set_auth_bearer())
+            video = self._download_json(json_url, video_id, "Downloading video JSON", headers=self._HEADERS)
             info = self._extract_video(video, video_id)
             entry["slug_url"] = info.get("slug_url")
 
