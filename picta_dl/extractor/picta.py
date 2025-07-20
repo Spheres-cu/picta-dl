@@ -1,6 +1,5 @@
 from typing import Dict, Any
 
-from base64 import b64encode
 import re
 import math
 from ..compat import compat_str, compat_HTTPError
@@ -24,9 +23,10 @@ API_BASE_URL = "https://api.picta.cu/v2/"
 API_CLIENT_ID = "ebkU3YeFu3So9hesQHrS8AZjEa4v7TiYbS5QZIgO"
 API_TOKEN_URL = "https://api.picta.cu/o/token/"
 
+
 # noinspection PyAbstractClass
 class PictaBaseIE(InfoExtractor):
-   
+
     @staticmethod
     def _extract_video(video, video_id=None, require_title=True):
         if len(video["results"]) == 0:
@@ -75,8 +75,10 @@ class PictaBaseIE(InfoExtractor):
             "subtitle_url": subtitle_url,
         }
 
+
 # noinspection PyAbstractClass
 class PictaIE(PictaBaseIE):
+
     IE_NAME = "picta"
     IE_DESC = "Picta videos"
     _VALID_URL = (
@@ -162,12 +164,11 @@ class PictaIE(PictaBaseIE):
         username, password = self._get_login_info()
         if not username or not password:
             raise self.raise_login_required(msg="Login credentials needed")
-        
         self._access_token = self._get_access_token(username, password)
         self._HEADERS = {"Authorization": f"Bearer {self._access_token}"}
 
     def _get_access_token(self, username, password):
-        data =urlencode_postdata( {
+        data = urlencode_postdata({
             "grant_type": "password",
             "client_id": API_CLIENT_ID,
             "client_secret": "",
@@ -185,9 +186,8 @@ class PictaIE(PictaBaseIE):
         if not token_response or 'access_token' not in token_response:
             self._downloader.report_error("Failed to fetch access token")
             return None
-        
         return token_response['access_token']
-    
+
     @classmethod
     def _match_playlist_id(cls, url):
         if "_VALID_URL_RE" not in cls.__dict__:
@@ -261,11 +261,11 @@ class PictaIE(PictaBaseIE):
         """
         Parse formats from MPD manifest.
         References:
-         1. MPEG-DASH Standard, ISO/IEC 23009-1:2014(E),
+            1. MPEG-DASH Standard, ISO/IEC 23009-1:2014(E),
             http://standards.iso.org/ittf/PubliclyAvailableStandards/c065274_ISO_IEC_23009-1_2014.zip
-         2. https://en.wikipedia.org/wiki/Dynamic_Adaptive_Streaming_over_HTTP
+            2. https://en.wikipedia.org/wiki/Dynamic_Adaptive_Streaming_over_HTTP
         Note: Fix MPD manifest for Picta
-         3. https://developer.mozilla.org/en-US/docs/Web/Guide/Audio_and_video_delivery/Setting_up_adaptive_streaming_media_sources
+            3. https://developer.mozilla.org/en-US/docs/Web/Guide/Audio_and_video_delivery/Setting_up_adaptive_streaming_media_sources
         """
         if mpd_doc.get("type") == "dynamic":
             return []
@@ -407,7 +407,7 @@ class PictaIE(PictaBaseIE):
                             else None
                         )
                         bandwidth = int_or_none(representation_attrib.get("bandwidth"))
-                        f:Dict[str, Any] = {
+                        f: Dict[str, Any] = {
                             "format_id": "%s-%s" % (mpd_id, representation_id)
                             if mpd_id
                             else representation_id,
@@ -653,7 +653,7 @@ class PictaIE(PictaBaseIE):
                             "Unknown MIME type %s in DASH manifest" % mime_type
                         )
         return formats
-    
+
     def _real_extract(self, url):
         playlist_id = None
         video_id = self._match_id(url)
@@ -810,7 +810,7 @@ class PictaPlaylistIE(PictaIE):
         m = cls._VALID_URL_RE.match(url)
         assert m
         return m.group("playlist_id")
-    
+
     def _extract_playlist(self, playlist, playlist_id=None, require_title=True):
         if len(playlist.get("results", [])) == 0:
             raise ExtractorError("Cannot find playlist!")
@@ -884,6 +884,7 @@ class PictaChannelPlaylistIE(PictaPlaylistIE):
             "thumbnail": r"re:^https?://.*imagen/img.*\.jpeg$",
         },
     }
+
 
 # noinspection PyAbstractClass
 class PictaUserPlaylistIE(PictaPlaylistIE):
