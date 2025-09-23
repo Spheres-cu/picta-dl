@@ -46,6 +46,7 @@ class PictaBaseIE(InfoExtractor):
         )
         add_date = try_get(video, lambda x: x["results"][0]["fecha_creacion"])
         timestamp = int_or_none(unified_timestamp(add_date))
+        duration = try_get(video, lambda x: x["results"][0]["duracion"])
         thumbnail = try_get(video, lambda x: x["results"][0]["url_imagen"])
         manifest_url = try_get(video, lambda x: x["results"][0]["url_manifiesto"])
         category = try_get(
@@ -67,6 +68,7 @@ class PictaBaseIE(InfoExtractor):
             "slug_url": slug_url,
             "description": description,
             "thumbnail": thumbnail,
+            "duration": parse_duration(duration),
             "uploader": uploader,
             "timestamp": timestamp,
             "category": [category] if category else None,
@@ -97,6 +99,7 @@ class PictaIE(PictaBaseIE):
                 "ext": "webm",
                 "title": "Orishas - Everyday",
                 "thumbnail": r"re:^https?://.*imagen/img.*\.png$",
+                "duration": 204,
                 "upload_date": "20190116",
                 "description": "Orishas - Everyday (Video Oficial)",
                 "uploader": "admin",
@@ -120,6 +123,7 @@ class PictaIE(PictaBaseIE):
                 "ext": "mp4",
                 "title": "Palmiche Galeno tercer lugar en torneo virtual de robótica",
                 "thumbnail": r"re:^https?://.*imagen/img.*\.jpeg$",
+                "duration": 252,
                 "upload_date": "20200521",
                 "description": (
                     "En esta emisión:\r\n"
@@ -743,6 +747,7 @@ class PictaEmbedIE(InfoExtractor):
                 "ext": "webm",
                 "title": "Orishas - Everyday",
                 "thumbnail": r"re:^https?://.*imagen/img.*\.png$",
+                "duration": 204,
                 "upload_date": "20190116",
                 "description": "Orishas - Everyday (Video Oficial)",
                 "uploader": "admin",
@@ -766,6 +771,7 @@ class PictaEmbedIE(InfoExtractor):
                 "ext": "mp4",
                 "title": "Palmiche Galeno tercer lugar en torneo virtual de robótica",
                 "thumbnail": r"re:^https?://.*imagen/img.*\.jpeg$",
+                "duration": 252,
                 "upload_date": "20200521",
                 "description": (
                     "En esta emisión:\r\n"
@@ -849,7 +855,7 @@ class PictaPlaylistIE(PictaIE):
 
         info_playlist = self._extract_playlist(playlist, playlist_id)
         playlist_entries = info_playlist.get("entries")
-
+        entries: Dict[str, Any] = {}
         for video in playlist_entries:
             video_id = video.get("id")
             video_url = (
@@ -860,12 +866,43 @@ class PictaPlaylistIE(PictaIE):
                 + "playlist="
                 + playlist_id
             )
-            yield self.url_result(video_url, PictaIE.ie_key(), video_id)
+            video_title = video.get("nombre")
+            duration = parse_duration(video.get("duracion"))
+            entries = self.url_result(video_url, PictaIE.ie_key(), video_id, video_title)
+            entries['duration'] = duration
+            yield entries
 
     def _real_extract(self, url):
+        playlist = {}
+        info_playlist: Dict[str, Any] = {}
         playlist_id = self._match_playlist_id(url)
         entries = self._entries(playlist_id)
-        return self.playlist_result(entries, playlist_id)
+        json_url = self.API_PLAYLIST_ENDPOINT + "?format=json&id=%s" % playlist_id
+        playlist = self._download_json(
+            json_url, playlist_id, "Downloading playlist JSON", headers=self._HEADERS
+        )
+        info = self._extract_playlist(playlist, playlist_id)
+
+        video_id = self._match_id(url)
+        json_slug_url = API_BASE_URL + "publicacion/?format=json&slug_url_raw=%s" % video_id
+        video = self._download_json(json_slug_url, video_id, "Downloading video JSON", headers=self._HEADERS)
+        model = try_get(
+            video,
+            lambda x: x["results"][0]["categoria"]["tipologia"]["modelo"],
+            compat_str,
+        )
+        if model == "capitulo":
+            thumbnail = try_get(
+                video,
+                lambda x: x["results"][0]["categoria"]["capitulo"]["temporada"]["serie"]["imagen_secundaria"])
+        elif model == "pelicula":
+            thumbnail = try_get(
+                video,
+                lambda x: x["results"][0]["categoria"]["pelicula"]["imagen_secundaria"])
+
+        info_playlist = self.playlist_result(entries, playlist_id, info.get('title'))
+        info_playlist['thumbnail'] = thumbnail
+        return info_playlist
 
 
 # noinspection PyAbstractClass
